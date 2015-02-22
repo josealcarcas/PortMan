@@ -1,0 +1,290 @@
+pkid	idCategory	idNodeData	iParent	iOrder	iLevel	chName
+1	1	1	0	1	1	Bogle
+2	1	2	0	2	1	Permanent Portfolio
+3	1	3	1	1	2	World Stocks
+4	1	4	1	2	2	Emergent Stocks
+5	1	5	1	3	2	Alternative Stocks
+6	1	6	1	4	2	Inflation Linked Bonds
+7	1	7	1	5	2	Aggregate Bonds
+8	1	8	2	1	2	Grow Stocks
+9	1	9	2	2	2	Euro Long Bonds
+10	1	10	2	3	2	Euro Short Bonds
+11	1	11	2	4	2	Gold
+
+//tr[td= 'Estados Unidos']/td[2]
+//tr[td= 'Canadá']/td[2]
+//tr[td= 'Iberoamérica']/td[2]
+//tr[td= 'Reino Unido']/td[2]
+//tr[td= 'Zona Euro']/td[2]
+//tr[td= 'Europe - ex Euro']/td[2]
+//tr[td= 'Europe emergente']/td[2]
+//tr[td= 'África']/td[2]
+//tr[td= 'Oriente Medio']/td[2]
+//tr[td= 'Japón']/td[2]
+//tr[td= 'Australasia']/td[2]
+//tr[td= 'Asia - Desarrollada']/td[2]
+//tr[td= 'Asia - Emergente']/td[2]
+
+-- VL diarios.
+(.*);(.*);(.*);(.*);(.*);(.*);(.*);(.*)
+select 'insert into tbProductsValue \(idProduct, dtDate, dcPrice, chCurrency\) values \(' || pkid || ',''\3'',\5,''\6''\);' from tbProducts where chIsin = '\1' union all
+-- Para poner formato fecha VL.
+''([0-9]{4})([0-9]{2})([0-9]{2})''
+''\1-\2-\3''
+-- Para los que tienen en el valor "." y son en yenes.
+([0-9]+).([0-9]+),([0-9]+),''EUR''
+\1\2\300,''JPY''
+
+-- Para movimientos quitar duplicados.
+(.*)([0-9]{2})/([0-9]{2})/([0-9]{4})(.*)
+insert into @tbtemp \(d,s\) values \('\4\3\2','\1\4\3\2\5'\)
+-- Para fecha movimientos.
+;([0-9]{4})([0-9]{2})([0-9]{2});
+;\1-\2-\3;
+-- Para compra o venta
+;+
+;1;
+-
+;-
+;0;
+-- Para poner decimales.
+;([0-9]+),([0-9]+)
+;\1,\20000
+-- Para dejar 4 decimales.
+;([0-9]+),([0-9]{4})[0-9]+
+;\1,\2
+-- Para insertar % nodes.
+select 'insert into tbProductsComposition (idProduct, idNode, dtDate, dcValue) values (' || pkid || ', 1, ''2015-02-01'', 10000); -- ' || chName from tbProducts
+-- Para insertar nodedata
+insert into tbNodeData \(chName, chShortName, chAcronym\) values \('\1', '\1',''\);
+-- Para generar inserciones de tbClassifications a partir de tbNodeData
+select 'insert into tbClassifications \(idCategory, idNodeData, iParent, iOrder, iLevel\) values \(2,' || pkid || ',0,1,2\); -- ' || chname from tbnodedata where chname = '\1' union all
+---
+http://www.morningstar.es/es/funds/snapshot/snapshot.aspx?id=F00000286V
+http://www.morningstar.es/es/funds/snapshot/snapshot.aspx?id=F00000286V&tab=3 (cartera)
+Portfolio_ID=2199111
+
+---
+BOG;CP
+W,ALT,BLI,BONAGGR;EUGR,LP,CP,ORO
+--
+North America;Rest Developed;Emergent;Frontier
+Estados Unidos;Canadá;Iberoamérica;Reino Unido;Zona Euro;Europe - ex Euro;Europe emergente;África;Oriente Medio;Japón;Australasia;Asia - Desarrollada;Asia - Emergente
+---
+-- Actualizar número de participaciones según movimientos:
+
+select 'update tbProductsValue set dcheld = coalesce(dcheld, 0) + (' || case when bBuy = 0 then '-' else '' end || dcSharesNumber ||') where dtDate >= ''' || dtDate || ''' and idProduct = ' || idProduct
+       || '; update tbProductsTransactions set bApplied = 1 where pkid = ' || pkid || ';'
+from tbProductsTransactions
+order by dtDate
+---
+-- Obtener últimos VL
+select p.chName, pv.dtDate, pv.dcPrice, pv.dcHeld, pv.dcprice * pv.dcHeld as total
+from tbProductsValue pv
+     inner join (select idproduct, max(dtdate) as maxdate     
+                from tbProductsValue                
+                group by idproduct) lastpv                                
+     on (pv.idproduct = lastpv.idproduct     
+        and pv.[dtDate] = lastpv.[maxdate])        
+     inner join tbProducts p     
+     on pv.idProduct = p.pkid
+order by p.[chName]
+
+---
+result script getnodeValues:
+idnode tree parnt name value date
+
+-- value calculated from tbAlloc, tbPPrice and tbPData.
+-- get % adding value in nodes from the same tree and calc. %.
+--
+select pv.idProduct, pv.dtDate, pv.dcPrice * pv.dcValue as investValue
+from tbProductsValue pv
+    inner join (select idProduct, max(dtDate) as maxDate
+                    from tbProductsValue) maxpv
+        on (pv.idProduct = maxpv.idProduct
+            and pv.dtDate = maxpv.maxDate)
+-
+select data.idProduct, data.dtDate, data.investValue, (data.investValue * 100) / data.total as perct, data.total
+from (select pv.idProduct, pv.dtDate, pv.dcPrice * pv.dcValue as investValue
+            , (select sum(pv2.dcPrice * pv2.dcValue)
+                from tbProductsValue pv2
+                where pv2.idProduct = pv.idProduct
+                    and pv2.dtDate = pv.dtDate) as total
+        from tbProductsValue pv
+            inner join (select idProduct, max(dtDate) as maxDate
+                            from tbProductsValue) maxpv
+                on (pv.idProduct = maxpv.idProduct
+                    and pv.dtDate = maxpv.maxDate)
+        where pv.dcHeld > 0) data
+-
+-- Cantidad por nodo.
+select p.chname, pc.idNode, pc.dcValue, printf("%.4f", pvalue.amount) as amount
+, pvalue.amount * (pc.dcValue / 10000.0) as amountinnode --, nd.chname
+from tbproductscomposition pc
+inner join tbproducts p
+on pc.idproduct = p.pkid
+inner join (select pv.idProduct
+, pv.dtDate
+, (pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0) as amount
+from tbProductsValue pv
+  inner join (select idproduct, max(dtdate) as maxdate     
+              from tbProductsValue                
+              group by idproduct) lastpv                                
+     on (pv.idproduct = lastpv.idproduct     
+        and pv.[dtDate] = lastpv.[maxdate])) pvalue        
+on pc.[idProduct] = pvalue.idProduct
+-
+-- Cantidad y porcentaje del total en nodo nivel 2.
+CREATE TEMP TABLE _Variables(Name TEXT PRIMARY KEY, RealValue REAL, IntegerValue INTEGER, BlobValue BLOB, TextValue TEXT);
+INSERT INTO _Variables (Name) VALUES ('dcTotal');
+UPDATE _Variables SET IntegerValue = (select sum((pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0)) as total
+                                    from tbProductsValue pv
+                                       inner join (select idproduct, max(dtdate) as maxdate     
+                                                  from tbProductsValue                
+                                                  group by idproduct) lastpv                                
+                                         on (pv.idproduct = lastpv.idproduct     
+                                            and pv.[dtDate] = lastpv.[maxdate]))
+WHERE Name = 'dcTotal';
+
+;with cte as
+(
+  select coalesce(RealValue, IntegerValue, BlobValue, TextValue) as total
+  from _Variables where Name = 'dcTotal'
+  limit 1 
+)
+select pc.idNode, nd.chname
+  , sum(pvalue.amount * (pc.dcValue / 10000.0)) as amountinnode  
+  , printf("%.2f", (sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total) as percinnode 
+  , printf("%.4f", cte.total) as total
+from tbproductscomposition pc
+inner join tbproducts p
+on pc.idproduct = p.pkid
+inner join (select pv.idProduct
+            , pv.dtDate
+            , (pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0) as amount
+            from tbProductsValue pv
+              inner join (select idproduct, max(dtdate) as maxdate     
+                          from tbProductsValue                
+                          group by idproduct) lastpv                                
+                 on (pv.idproduct = lastpv.idproduct     
+                    and pv.[dtDate] = lastpv.[maxdate])) pvalue        
+    on pc.[idProduct] = pvalue.idProduct
+  inner join tbClassifications c
+    on c.idnodedata = pc.idnode
+  inner join tbnodedata nd
+    on pc.idnode = nd.pkid    
+  , cte
+where c.idcategory = 1
+  and c.iLevel = 2
+group by pc.idNode, nd.chname;
+
+DROP TABLE _Variables;
+-
+-- Cantidad y porcentaje total nodo nivel 1 mediante suma de los de nivel 2.
+
+CREATE TEMP TABLE _Variables(Name TEXT PRIMARY KEY, RealValue REAL, IntegerValue INTEGER, BlobValue BLOB, TextValue TEXT);
+INSERT INTO _Variables (Name) VALUES ('dcTotal');
+UPDATE _Variables SET IntegerValue = (select sum((pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0)) as total
+                                    from tbProductsValue pv
+                                       inner join (select idproduct, max(dtdate) as maxdate     
+                                                  from tbProductsValue                
+                                                  group by idproduct) lastpv                                
+                                         on (pv.idproduct = lastpv.idproduct     
+                                            and pv.[dtDate] = lastpv.[maxdate]))
+WHERE Name = 'dcTotal';
+
+;with cte as
+(
+  select coalesce(RealValue, IntegerValue, BlobValue, TextValue) as total
+  from _Variables where Name = 'dcTotal'
+  limit 1 
+)
+select parentnode.chName
+  , printf('%.4f', sum(leavesdata.amountinnode)) as amountparent
+  , printf('%.2f%', sum(leavesdata.percinnode)) as perctotalparent
+  , printf('%.4f', leavesdata.total) as total
+from (select pc.idNode, c2.idnodedata as parentnode, nd.chname
+        , sum(pvalue.amount * (pc.dcValue / 10000.0)) as amountinnode  
+        , (sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total as percinnode 
+        , cte.total as total
+      from tbproductscomposition pc
+      inner join tbproducts p
+      on pc.idproduct = p.pkid
+      inner join (select pv.idProduct
+                  , pv.dtDate
+                  , (pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0) as amount
+                  from tbProductsValue pv
+                    inner join (select idproduct, max(dtdate) as maxdate     
+                                from tbProductsValue                
+                                group by idproduct) lastpv                                
+                       on (pv.idproduct = lastpv.idproduct     
+                          and pv.[dtDate] = lastpv.[maxdate])) pvalue        
+          on pc.[idProduct] = pvalue.idProduct
+        inner join tbClassifications c
+          on c.idnodedata = pc.idnode
+        inner join tbnodedata nd
+          on pc.idnode = nd.pkid
+        left join tbClassifications c2  
+          on c.iParent = c2.idnodedata
+        , cte
+      where c.idcategory = 1
+        and c.iLevel = 2
+      group by pc.idNode, nd.chname) leavesdata      
+  inner join tbnodedata parentnode
+    on leavesdata.parentnode = parentnode.pkid
+group by leavesdata.parentnode, leavesdata.total;
+
+drop table _Variables;
+-
+-- Porcentaje objetivo y diferencia con el actual nivel 2.
+CREATE TEMP TABLE _Variables(Name TEXT PRIMARY KEY, RealValue REAL, IntegerValue INTEGER, BlobValue BLOB, TextValue TEXT);
+INSERT INTO _Variables (Name) VALUES ('dcTotal');
+UPDATE _Variables SET IntegerValue = (select sum((pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0)) as total
+                                    from tbProductsValue pv
+                                       inner join (select idproduct, max(dtdate) as maxdate    
+                                                  from tbProductsValue               
+                                                  group by idproduct) lastpv                               
+                                         on (pv.idproduct = lastpv.idproduct    
+                                            and pv.[dtDate] = lastpv.[maxdate]))
+WHERE Name = 'dcTotal';
+
+;with cte as
+(
+  select coalesce(RealValue, IntegerValue, BlobValue, TextValue) as total
+  from _Variables where Name = 'dcTotal'
+  limit 1
+)
+select pc.idNode, nd.chname
+  , printf("%.4f",sum(pvalue.amount * (pc.dcValue / 10000.0))) as amountinnode 
+  , printf("%.2f%", (sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total) as percinnode 
+  , printf("%.2f%", na.dcNodeGoalAlloc / 100.0) as percgoal 
+  , printf("%.2f%", ((sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total)
+    - na.dcNodeGoalAlloc / 100.0) as percdiff
+  , printf("%.4f", cte.total) as total
+from tbproductscomposition pc
+inner join tbproducts p
+on pc.idproduct = p.pkid
+inner join (select pv.idProduct
+            , pv.dtDate
+            , (pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0) as amount
+            from tbProductsValue pv
+              inner join (select idproduct, max(dtdate) as maxdate    
+                          from tbProductsValue               
+                          group by idproduct) lastpv                               
+                 on (pv.idproduct = lastpv.idproduct    
+                    and pv.[dtDate] = lastpv.[maxdate])) pvalue       
+    on pc.[idProduct] = pvalue.idProduct
+  inner join tbClassifications c
+    on c.idnodedata = pc.idnode
+  inner join tbnodedata nd
+    on pc.idnode = nd.pkid 
+  inner join tbNodeAllocations na
+    on (c.pkid = na.idnode   
+      and na.idAlloc = 1)
+  , cte
+where c.idcategory = 1
+  and c.iLevel = 2
+group by pc.idNode, nd.chname, na.dcNodeGoalAlloc;
+
+DROP TABLE _Variables;
+---

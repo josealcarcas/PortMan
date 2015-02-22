@@ -1,0 +1,11 @@
+
+-- Borrar todos registros menos el de la última fecha.
+delete from tbProductsValue
+where pkid in 
+  (select pkid
+  from tbProductsValue pv
+  inner join (select idproduct, max(dtdate) as maxdate     
+            from tbProductsValue                
+            group by idproduct) lastpv                                
+    on (pv.idproduct = lastpv.idproduct     
+      and pv.[dtDate] <> lastpv.[maxdate]))

@@ -1,0 +1,64 @@
+-- Cálculo procentajes y diferencias nivel 2 diferentes carteras
+
+-- Falta insertar (lo he hecho para pruebas): insert into tbPortfoliosComposition (idProduct, idPortfolio, dtDate, dcValue) values (23,1,'2015-02-01',10000); -- Invesco Gold & Precious Mtls E
+
+CREATE TEMP TABLE _Variables(Name TEXT PRIMARY KEY, RealValue REAL, IntegerValue INTEGER, BlobValue BLOB, TextValue TEXT);
+INSERT INTO _Variables (Name) VALUES ('dcTotal');
+UPDATE _Variables SET IntegerValue = (select sum(((pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0) * (pc.dcValue / 100.0)) / 100.0)  as total
+                                      from tbProductsValue pv
+                                         inner join (select idproduct, max(dtdate) as maxdate     
+                                                    from tbProductsValue                
+                                                    group by idproduct) lastpv                                
+                                           on (pv.idproduct = lastpv.idproduct     
+                                              and pv.[dtDate] = lastpv.[maxdate])        
+                                      inner join tbportfolioscomposition pc
+                                        on pv.idproduct = pc.idproduct
+                                      where pc.idPortfolio = 1)
+WHERE Name = 'dcTotal';
+
+;with cte as
+(
+  select coalesce(RealValue, IntegerValue, BlobValue, TextValue) as total
+  from _Variables where Name = 'dcTotal'
+  limit 1 
+)
+select pc.idNode, nd.chname
+  , printf("%.4f",sum(pvalue.amount * (pc.dcValue / 10000.0))) as amountinnode  
+  , printf("%.2f%", (sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total) as percinnode  
+  , printf("%.2f%", na.dcNodeGoalAlloc / 100.0) as percgoal  
+  , printf("%.2f%", coalesce(((sum(pvalue.amount * (pc.dcValue / 10000.0)) * 100.0) / cte.total), 0)
+    - na.dcNodeGoalAlloc / 100.0) as percdiff 
+  , printf("%.4f", cte.total) as total
+from tbCategoriesComposition pc
+left join tbproducts p
+on pc.idproduct = p.pkid
+left join (select pv.idProduct
+            , pv.dtDate
+            , ((pv.dcprice / 10000.0) * (pv.dcHeld / 10000.0)* (pc1.dcValue / 100.0)) / 100.0 as amount
+            from tbProductsValue pv
+              inner join (select idproduct, max(dtdate) as maxdate     
+                          from tbProductsValue                
+                          group by idproduct) lastpv                                
+                 on (pv.idproduct = lastpv.idproduct     
+                    and pv.[dtDate] = lastpv.[maxdate])
+              inner join tbportfolioscomposition pc1
+                on pv.idproduct = pc1.idproduct
+          where pc1.idPortfolio = 1) pvalue        
+    on pc.[idProduct] = pvalue.idProduct
+  left join tbClassifications c
+    on c.idnodedata = pc.idnode
+  left join tbnodedata nd
+    on pc.idnode = nd.pkid  
+  left join tbNodeAllocations na
+    on (c.pkid = na.idnode    
+      and na.idAlloc = 1)
+  , cte
+  left join tbportfolioscomposition pf
+    on pf.idproduct = pc.idproduct
+and pf.idPortfolio = 1
+where c.idcategory = 1
+  and c.iLevel = 2
+group by pc.idNode, nd.chname, na.dcNodeGoalAlloc;
+
+DROP TABLE _Variables;
+
